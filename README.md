@@ -1,6 +1,6 @@
 # auto-trans
 
-Transform video URLs into clean, readable transcripts with one command.
+>Transform video URLs into clean, readable transcripts **with one command**.
 
 auto-trans is an AI-powered command-line tool that automatically downloads audio, transcribes it using Whisper, and copies the text (with source URL) to your clipboard — ready for pasting, organizing, or prompting your favorite LLM.
 
