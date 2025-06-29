@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # auto-trans - System-wide audio transcription wrapper
-# Usage: auto-trans <url> [additional options]
+# Usage: auto-trans <url|file_path> [additional options]
 
 # Configuration - Modify these paths according to your setup
 SCRIPT_DIR="/home/torchenv/workspace/threading/audio"
@@ -33,19 +33,53 @@ print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Check if URL is provided
+# Check if URL/file is provided
 if [ $# -eq 0 ]; then
-    print_error "Usage: auto-trans <url> [additional options]"
-    print_error "Example: auto-trans https://www.bilibili.com/video/BV1qvM8zJEJt"
+    print_error "Usage: auto-trans <url|file_path> [additional options]"
+    print_error "Examples:"
+    print_error "  auto-trans https://www.bilibili.com/video/BV1qvM8zJEJt"
+    print_error "  auto-trans /path/to/video.mp4"
+    print_error "  auto-trans ./audio.mp3"
     exit 1
 fi
 
-URL="$1"
-shift  # Remove URL from arguments, keep the rest
+INPUT="$1"
+shift  # Remove input from arguments, keep the rest
 
-# Validate URL format
-if [[ ! "$URL" =~ ^https?:// ]]; then
-    print_error "Invalid URL format. URL must start with http:// or https://"
+# Function to check if input is a URL
+is_url() {
+    [[ "$1" =~ ^https?:// ]]
+}
+
+# Function to check if input is a file
+is_file() {
+    [[ -f "$1" ]]
+}
+
+# Validate input
+if is_url "$INPUT"; then
+    print_status "Processing URL: $INPUT"
+    INPUT_TYPE="url"
+elif is_file "$INPUT"; then
+    # Convert to absolute path
+    INPUT=$(realpath "$INPUT")
+    print_status "Processing local file: $INPUT"
+    INPUT_TYPE="file"
+    
+    # Check if file has supported extension
+    case "${INPUT,,}" in
+        *.mp4|*.mp3|*.wav|*.m4a|*.aac|*.ogg|*.flac|*.webm|*.mkv|*.avi|*.mov)
+            print_status "Supported audio/video format detected"
+            ;;
+        *)
+            print_warning "File extension may not be supported, but will attempt transcription"
+            ;;
+    esac
+else
+    print_error "Invalid input. Must be either:"
+    print_error "  - A valid URL starting with http:// or https://"
+    print_error "  - A valid file path to an existing audio/video file"
+    print_error "Provided: $INPUT"
     exit 1
 fi
 
@@ -69,16 +103,17 @@ if [ ! -f "$SCRIPT_DIR/$PYTHON_SCRIPT" ]; then
     exit 1
 fi
 
-print_status "Starting audio transcription for: $URL"
+print_status "Starting transcription for: $INPUT"
 
 # Change to script directory
 cd "$SCRIPT_DIR" || exit 1
 
 # Activate virtual environment and run transcription
-source "$VENV_PATH/bin/activate" || {
+source "$VENV_PATH/bin/activate"
+if [ $? -ne 0 ]; then
     print_error "Failed to activate virtual environment"
     exit 1
-}
+fi
 
 # Build command with default arguments
 CMD_ARGS=()
@@ -89,12 +124,13 @@ if [ -n "$DEFAULT_LANGUAGE" ]; then
     CMD_ARGS+=("-l" "$DEFAULT_LANGUAGE")
 fi
 
-if [ -n "$DEFAULT_FORMAT" ]; then
+# Only add format option for URLs, not for local files
+if [ "$INPUT_TYPE" = "url" ] && [ -n "$DEFAULT_FORMAT" ]; then
     CMD_ARGS+=("-f" "$DEFAULT_FORMAT")
 fi
 
-# Add URL
-CMD_ARGS+=("$URL")
+# Add input (URL or file path)
+CMD_ARGS+=("$INPUT")
 
 # Add any additional arguments passed to the script
 CMD_ARGS+=("$@")

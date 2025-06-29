@@ -2,7 +2,7 @@
 """
 Audio Transcription Tool
 Automated audio downloading and transcription using yt-dlp and Whisper
-Supports multiprocessing, auto cleanup, and clipboard functionality
+Supports multiprocessing, auto cleanup, clipboard functionality, and local file processing
 """
 
 import os
@@ -46,8 +46,9 @@ except ImportError as e:
 @dataclass
 class TranscriptionJob:
     """Represents a single transcription job"""
-    url: str
+    source: str  # URL or file path
     job_id: str
+    is_local_file: bool = False
     audio_format: Optional[str] = None
     language: Optional[str] = None
     status: str = "pending"
@@ -90,9 +91,28 @@ class AudioTranscriber:
                 self.model = WhisperModel(self.whisper_model)
             else:
                 self.model = whisper.load_model(self.whisper_model)
+    
+    def _is_url(self, source: str) -> bool:
+        """Check if source is a URL"""
+        return source.startswith(('http://', 'https://'))
+    
+    def _is_local_file(self, source: str) -> bool:
+        """Check if source is a local file"""
+        return os.path.isfile(source)
+    
+    def _is_supported_audio_video_file(self, file_path: str) -> bool:
+        """Check if file has a supported audio/video extension"""
+        supported_extensions = {
+            '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma',
+            '.mp4', '.mkv', '.avi', '.mov', '.webm', '.3gp', '.flv'
+        }
+        return Path(file_path).suffix.lower() in supported_extensions
             
     def get_available_formats(self, url: str) -> List[Dict]:
         """Get available audio formats for a URL"""
+        if not self._is_url(url):
+            return []
+            
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -121,6 +141,85 @@ class AudioTranscriber:
             self.logger.error(f"Error getting formats for {url}: {e}")
             return []
     
+    def _extract_audio_from_video(self, video_path: str, output_path: str) -> bool:
+        """Extract audio from video file using ffmpeg"""
+        try:
+            # Check if ffmpeg is available
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.logger.error("ffmpeg is required for video processing but not found")
+            return False
+        
+        try:
+            # Extract audio using ffmpeg
+            cmd = [
+                'ffmpeg', '-i', video_path,
+                '-vn',  # No video
+                '-acodec', 'libmp3lame',  # MP3 codec
+                '-ab', '192k',  # Audio bitrate
+                '-ar', '44100',  # Sample rate
+                '-y',  # Overwrite output file
+                output_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                self.logger.info(f"Audio extracted to: {output_path}")
+                return True
+            else:
+                self.logger.error(f"ffmpeg error: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error extracting audio: {e}")
+            return False
+    
+    def _prepare_local_file(self, job: TranscriptionJob) -> bool:
+        """Prepare local file for transcription"""
+        try:
+            source_path = job.source
+            
+            # Check if file exists
+            if not os.path.exists(source_path):
+                raise FileNotFoundError(f"File not found: {source_path}")
+            
+            # Get file extension
+            file_ext = Path(source_path).suffix.lower()
+            
+            # Audio files can be used directly
+            audio_extensions = {'.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma'}
+            if file_ext in audio_extensions:
+                job.audio_file = source_path
+                self.logger.info(f"Using audio file directly: {source_path}")
+                return True
+            
+            # Video files need audio extraction
+            video_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.3gp', '.flv'}
+            if file_ext in video_extensions:
+                # Create temporary audio file
+                safe_id = "".join(c for c in job.job_id if c.isalnum() or c in ('-', '_'))
+                audio_file = os.path.join(self.temp_dir, f"extracted_audio_{safe_id}.mp3")
+                
+                if self._extract_audio_from_video(source_path, audio_file):
+                    job.audio_file = audio_file
+                    return True
+                else:
+                    # Fallback: try to use video file directly with Whisper
+                    self.logger.warning("Audio extraction failed, trying to use video file directly")
+                    job.audio_file = source_path
+                    return True
+            
+            # Unsupported file type, but let's try anyway
+            self.logger.warning(f"Unsupported file type {file_ext}, attempting transcription anyway")
+            job.audio_file = source_path
+            return True
+            
+        except Exception as e:
+            job.error = f"File preparation error: {str(e)}"
+            job.status = "failed"
+            self.logger.error(f"File preparation failed for job {job.job_id}: {e}")
+            return False
+    
     def _download_audio(self, job: TranscriptionJob) -> bool:
         """Download audio from URL"""
         try:
@@ -141,7 +240,7 @@ class AudioTranscriber:
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([job.url])
+                ydl.download([job.source])
                 
             # Find the downloaded file
             base_path = audio_file.replace('.%(ext)s', '')
@@ -178,9 +277,16 @@ class AudioTranscriber:
             if USING_FASTER_WHISPER:
                 segments, info = self.model.transcribe(job.audio_file, **transcribe_options)
                 job.transcript = " ".join([segment.text for segment in segments]).strip()
+                # Log detected language info if available
+                if hasattr(info, 'language'):
+                    self.logger.info(f"Detected language: {info.language} (confidence: {getattr(info, 'language_probability', 'N/A')})")
             else:
                 result = self.model.transcribe(job.audio_file, **transcribe_options)
                 job.transcript = result['text'].strip()
+                # Log detected language if available
+                if 'language' in result:
+                    self.logger.info(f"Detected language: {result['language']}")
+                    
             job.status = "completed"
             
             self.logger.info(f"Transcription completed for job {job.job_id}")
@@ -193,20 +299,32 @@ class AudioTranscriber:
             return False
     
     def _cleanup_audio_file(self, job: TranscriptionJob):
-        """Clean up downloaded audio file"""
-        if self.auto_cleanup and job.audio_file and os.path.exists(job.audio_file):
-            try:
-                os.remove(job.audio_file)
-                self.logger.info(f"Cleaned up audio file: {job.audio_file}")
-            except Exception as e:
-                self.logger.warning(f"Failed to cleanup {job.audio_file}: {e}")
+        """Clean up downloaded/extracted audio file"""
+        if self.auto_cleanup and job.audio_file:
+            # Only delete if it's not the original local file
+            if job.is_local_file and job.audio_file == job.source:
+                # Don't delete the original local file
+                return
+            
+            if os.path.exists(job.audio_file):
+                try:
+                    os.remove(job.audio_file)
+                    self.logger.info(f"Cleaned up audio file: {job.audio_file}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to cleanup {job.audio_file}: {e}")
     
     def _process_job(self, job: TranscriptionJob):
         """Process a single transcription job"""
         try:
-            # Download audio
-            if not self._download_audio(job):
-                return
+            # Handle local files vs URLs
+            if job.is_local_file:
+                # Prepare local file
+                if not self._prepare_local_file(job):
+                    return
+            else:
+                # Download audio from URL
+                if not self._download_audio(job):
+                    return
                 
             # Transcribe audio
             if not self._transcribe_audio(job):
@@ -216,14 +334,23 @@ class AudioTranscriber:
             # Cleanup
             self._cleanup_audio_file(job)
     
-    def add_job(self, url: str, audio_format: Optional[str] = None, 
+    def add_job(self, source: str, audio_format: Optional[str] = None, 
                 language: Optional[str] = None) -> str:
         """Add a new transcription job"""
         job_id = f"job_{int(time.time() * 1000)}_{len(self.jobs)}"
+        
+        # Determine if source is a local file or URL
+        is_local_file = self._is_local_file(source)
+        
+        # Validate input
+        if not is_local_file and not self._is_url(source):
+            raise ValueError(f"Source must be either a valid URL or existing file: {source}")
+        
         job = TranscriptionJob(
-            url=url,
+            source=source,
             job_id=job_id,
-            audio_format=audio_format,
+            is_local_file=is_local_file,
+            audio_format=audio_format if not is_local_file else None,  # Format only applies to URLs
             language=language
         )
         self.jobs[job_id] = job
@@ -262,14 +389,15 @@ class AudioTranscriber:
         return self.jobs
     
     def copy_transcript_to_clipboard(self, job_id: str) -> bool:
-        """Copy transcript to clipboard with URL prefix"""
+        """Copy transcript to clipboard with source prefix"""
         job = self.jobs.get(job_id)
         if job and job.transcript:
             try:
-                # Include URL at the beginning for easy reference
-                clipboard_content = f"Source: {job.url}\n\n{job.transcript}"
+                # Include source at the beginning for easy reference
+                source_label = "File" if job.is_local_file else "URL"
+                clipboard_content = f"Source ({source_label}): {job.source}\n\n{job.transcript}"
                 pyperclip.copy(clipboard_content)
-                self.logger.info(f"Transcript with URL copied to clipboard for job {job_id}")
+                self.logger.info(f"Transcript with source copied to clipboard for job {job_id}")
                 return True
             except Exception as e:
                 self.logger.error(f"Failed to copy to clipboard: {e}")
@@ -282,7 +410,8 @@ class AudioTranscriber:
         if job and job.transcript:
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(f"URL: {job.url}\n")
+                    source_label = "File" if job.is_local_file else "URL"
+                    f.write(f"Source ({source_label}): {job.source}\n")
                     f.write(f"Job ID: {job.job_id}\n")
                     f.write(f"Language: {job.language or 'auto-detected'}\n")
                     f.write("=" * 50 + "\n")
@@ -297,13 +426,13 @@ class AudioTranscriber:
 
 def main():
     """Main CLI interface"""
-    parser = argparse.ArgumentParser(description="Audio Transcription Tool")
-    parser.add_argument("urls", nargs="*", help="URLs to process")
+    parser = argparse.ArgumentParser(description="Audio Transcription Tool - Supports URLs and local files")
+    parser.add_argument("sources", nargs="*", help="URLs or file paths to process")
     parser.add_argument("--workers", "-w", type=int, default=4, help="Number of worker threads")
     parser.add_argument("--model", "-m", default="base", help="Whisper model to use")
     parser.add_argument("--language", "-l", help="Language code (e.g., 'en', 'zh')")
-    parser.add_argument("--format", "-f", help="Audio format ID to download")
-    parser.add_argument("--no-cleanup", action="store_true", help="Don't delete audio files after transcription")
+    parser.add_argument("--format", "-f", help="Audio format ID to download (URLs only)")
+    parser.add_argument("--no-cleanup", action="store_true", help="Don't delete temporary audio files after transcription")
     parser.add_argument("--list-formats", action="store_true", help="List available formats for URLs")
     parser.add_argument("--output", "-o", help="Save transcripts to file")
     parser.add_argument("--interactive", "-i", action="store_true", help="Interactive mode")
@@ -320,32 +449,44 @@ def main():
         interactive_mode(transcriber)
         return
     
-    if not args.urls:
+    if not args.sources:
         parser.print_help()
         return
     
-    # List formats mode
+    # List formats mode (only for URLs)
     if args.list_formats:
-        for url in args.urls:
-            print(f"\nAvailable formats for {url}:")
-            formats = transcriber.get_available_formats(url)
-            if formats:
-                print(f"{'ID':<10} {'EXT':<5} {'ABR':<6} {'SIZE':<10} {'NOTE'}")
-                print("-" * 50)
-                for fmt in formats:
-                    size = fmt.get('filesize')
-                    size_str = f"{size//1024//1024:.1f}MB" if size else "N/A"
-                    print(f"{fmt['format_id']:<10} {fmt['ext']:<5} {fmt.get('abr', 'N/A'):<6} {size_str:<10} {fmt['format_note']}")
+        for source in args.sources:
+            if transcriber._is_url(source):
+                print(f"\nAvailable formats for {source}:")
+                formats = transcriber.get_available_formats(source)
+                if formats:
+                    print(f"{'ID':<10} {'EXT':<5} {'ABR':<6} {'SIZE':<10} {'NOTE'}")
+                    print("-" * 50)
+                    for fmt in formats:
+                        size = fmt.get('filesize')
+                        size_str = f"{size//1024//1024:.1f}MB" if size else "N/A"
+                        print(f"{fmt['format_id']:<10} {fmt['ext']:<5} {fmt.get('abr', 'N/A'):<6} {size_str:<10} {fmt['format_note']}")
+                else:
+                    print("No audio formats found")
             else:
-                print("No audio formats found")
+                print(f"\n{source}: Local file - format listing not applicable")
         return
     
     # Add jobs
     job_ids = []
-    for url in args.urls:
-        job_id = transcriber.add_job(url, args.format, args.language)
-        job_ids.append(job_id)
-        print(f"Added job {job_id} for {url}")
+    for source in args.sources:
+        try:
+            job_id = transcriber.add_job(source, args.format, args.language)
+            job_ids.append(job_id)
+            source_type = "file" if transcriber._is_local_file(source) else "URL"
+            print(f"Added job {job_id} for {source_type}: {source}")
+        except ValueError as e:
+            print(f"Error: {e}")
+            continue
+    
+    if not job_ids:
+        print("No valid sources to process")
+        return
     
     # Process jobs
     print(f"\nProcessing {len(job_ids)} jobs...")
@@ -358,21 +499,22 @@ def main():
     
     for job_id in job_ids:
         job = results[job_id]
+        source_type = "File" if job.is_local_file else "URL"
         print(f"\nJob ID: {job_id}")
-        print(f"URL: {job.url}")
+        print(f"Source ({source_type}): {job.source}")
         print(f"Status: {job.status}")
         
         if job.status == "completed":
             print(f"Transcript:\n{job.transcript}")
             
-            # Automatically copy to clipboard for single URL processing
+            # Automatically copy to clipboard for single source processing
             if len(job_ids) == 1:
                 if transcriber.copy_transcript_to_clipboard(job_id):
-                    print("✓ Transcript (with URL) copied to clipboard")
+                    print("✓ Transcript (with source) copied to clipboard")
             else:
-                # For multiple URLs, still copy but mention it's automatic
+                # For multiple sources, still copy but mention it's automatic
                 if transcriber.copy_transcript_to_clipboard(job_id):
-                    print("✓ Transcript (with URL) copied to clipboard")
+                    print("✓ Transcript (with source) copied to clipboard")
             
             # Save to file if requested
             if args.output:
@@ -389,6 +531,7 @@ def main():
 def interactive_mode(transcriber: AudioTranscriber):
     """Interactive CLI mode"""
     print("=== Audio Transcription Tool - Interactive Mode ===")
+    print("Supports both URLs and local files")
     print("Commands: add, list, process, copy, save, formats, quit")
     
     while True:
@@ -404,23 +547,29 @@ def interactive_mode(transcriber: AudioTranscriber):
                 
             elif action == "add":
                 if len(cmd) < 2:
-                    print("Usage: add <url> [format_id] [language]")
+                    print("Usage: add <url|file_path> [format_id] [language]")
                     continue
-                url = cmd[1]
+                source = cmd[1]
                 format_id = cmd[2] if len(cmd) > 2 else None
                 language = cmd[3] if len(cmd) > 3 else None
-                job_id = transcriber.add_job(url, format_id, language)
-                print(f"Added job {job_id}")
+                try:
+                    job_id = transcriber.add_job(source, format_id, language)
+                    source_type = "file" if transcriber._is_local_file(source) else "URL"
+                    print(f"Added job {job_id} for {source_type}: {source}")
+                except ValueError as e:
+                    print(f"Error: {e}")
                 
             elif action == "list":
                 jobs = transcriber.get_all_jobs()
                 if not jobs:
                     print("No jobs")
                     continue
-                print(f"{'Job ID':<15} {'Status':<12} {'URL'}")
-                print("-" * 60)
+                print(f"{'Job ID':<15} {'Type':<5} {'Status':<12} {'Source'}")
+                print("-" * 70)
                 for job in jobs.values():
-                    print(f"{job.job_id:<15} {job.status:<12} {job.url[:30]}...")
+                    source_type = "File" if job.is_local_file else "URL"
+                    source_display = job.source[:40] + "..." if len(job.source) > 40 else job.source
+                    print(f"{job.job_id:<15} {source_type:<5} {job.status:<12} {source_display}")
                     
             elif action == "process":
                 print("Processing jobs...")
@@ -452,17 +601,20 @@ def interactive_mode(transcriber: AudioTranscriber):
                 if len(cmd) < 2:
                     print("Usage: formats <url>")
                     continue
-                url = cmd[1]
-                formats = transcriber.get_available_formats(url)
-                if formats:
-                    print(f"{'ID':<10} {'EXT':<5} {'ABR':<6} {'SIZE':<10} {'NOTE'}")
-                    print("-" * 50)
-                    for fmt in formats:
-                        size = fmt.get('filesize')
-                        size_str = f"{size//1024//1024:.1f}MB" if size else "N/A"
-                        print(f"{fmt['format_id']:<10} {fmt['ext']:<5} {fmt.get('abr', 'N/A'):<6} {size_str:<10} {fmt['format_note']}")
+                source = cmd[1]
+                if transcriber._is_url(source):
+                    formats = transcriber.get_available_formats(source)
+                    if formats:
+                        print(f"{'ID':<10} {'EXT':<5} {'ABR':<6} {'SIZE':<10} {'NOTE'}")
+                        print("-" * 50)
+                        for fmt in formats:
+                            size = fmt.get('filesize')
+                            size_str = f"{size//1024//1024:.1f}MB" if size else "N/A"
+                            print(f"{fmt['format_id']:<10} {fmt['ext']:<5} {fmt.get('abr', 'N/A'):<6} {size_str:<10} {fmt['format_note']}")
+                    else:
+                        print("No audio formats found")
                 else:
-                    print("No audio formats found")
+                    print("Format listing is only available for URLs, not local files")
                     
             else:
                 print("Unknown command. Available: add, list, process, copy, save, formats, quit")
