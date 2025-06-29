@@ -10,6 +10,8 @@ auto-trans is an AI-powered command-line tool that automatically downloads audio
 
 Whether you're a content creator, student, researcher, or curious mind, auto-trans empowers you to go from video ➡️ insight in seconds.
 
+!!! New functionality: also support local video/audio file transcription.
+
 ## ✨ Key Features
 
 - 🚀 **One-command operation**: `auto-trans <url>` - that's it!
