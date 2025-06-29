@@ -415,6 +415,10 @@ python transcribe.py --help
 
 If auto-trans saves you time, please consider giving it a star! ⭐
 
+<a href="https://github.com/Polumm/auto-trans/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Polumm/auto-trans" />
+</a>
+
 [![Star History Chart](https://api.star-history.com/svg?repos=Polumm/auto-trans&type=Date)](https://star-history.com/#Polumm/auto-trans&Date)
 
 ---
