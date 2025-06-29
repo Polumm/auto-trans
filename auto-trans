@@ -4,7 +4,7 @@
 # Usage: auto-trans <url> [additional options]
 
 # Configuration - Modify these paths according to your setup
-SCRIPT_DIR="/home/torchenv/workspace/theading/audio"
+SCRIPT_DIR="/home/torchenv/workspace/threading/audio"
 VENV_PATH="/home/torchenv/anaconda3"
 PYTHON_SCRIPT="transcribe.py"
 
