@@ -1,8 +1,14 @@
-# auto-trans 🎵➡️📝
+# auto-trans
 
-**One-command audio transcription from any video platform**
+Transform video URLs into clean, readable transcripts with one command.
 
-Transform video URLs into text transcripts instantly with automatic audio download, AI transcription, and clipboard integration. Perfect for content creators, researchers, students, and anyone who needs quick video-to-text conversion.
+auto-trans is an AI-powered command-line tool that automatically downloads audio, transcribes it using Whisper, and copies the text (with source URL) to your clipboard — ready for pasting, organizing, or prompting your favorite LLM.
+
+🚀 Just imagine: with a single command, you can extract accurate transcripts from most online video platforms — YouTube, Bilibili, Twitter, TikTok, and more — instantly, and start using them for notes, summaries, idea generation, or research.
+
+🧠 From there, plug your transcripts into ChatGPT, Claude, or any LLM to summarize, translate, annotate, or brainstorm. Build your own automated information capture and organization workflow, turbocharged by AI.
+
+Whether you're a content creator, student, researcher, or curious mind, auto-trans empowers you to go from video ➡️ insight in seconds.
 
 ## ✨ Key Features
 
