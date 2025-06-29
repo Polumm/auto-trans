@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# auto-trans - System-wide audio transcription wrapper
+# Usage: auto-trans <url> [additional options]
+
+# Configuration - Modify these paths according to your setup
+SCRIPT_DIR="/home/torchenv/workspace/theading/audio"
+VENV_PATH="/home/torchenv/anaconda3"
+PYTHON_SCRIPT="transcribe.py"
+
+# Default settings - Modify these as needed
+DEFAULT_WORKERS=4
+DEFAULT_MODEL="medium"
+DEFAULT_LANGUAGE="zh"  # Change to "en" or remove for auto-detection
+DEFAULT_FORMAT=""      # Leave empty for auto-selection, or set like "30232"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Check if URL is provided
+if [ $# -eq 0 ]; then
+    print_error "Usage: auto-trans <url> [additional options]"
+    print_error "Example: auto-trans https://www.bilibili.com/video/BV1qvM8zJEJt"
+    exit 1
+fi
+
+URL="$1"
+shift  # Remove URL from arguments, keep the rest
+
+# Validate URL format
+if [[ ! "$URL" =~ ^https?:// ]]; then
+    print_error "Invalid URL format. URL must start with http:// or https://"
+    exit 1
+fi
+
+# Check if script directory exists
+if [ ! -d "$SCRIPT_DIR" ]; then
+    print_error "Script directory not found: $SCRIPT_DIR"
+    print_error "Please update SCRIPT_DIR in this script to point to your transcribe.py location"
+    exit 1
+fi
+
+# Check if virtual environment exists
+if [ ! -d "$VENV_PATH" ]; then
+    print_error "Virtual environment not found: $VENV_PATH"
+    print_error "Please update VENV_PATH in this script or create the virtual environment"
+    exit 1
+fi
+
+# Check if Python script exists
+if [ ! -f "$SCRIPT_DIR/$PYTHON_SCRIPT" ]; then
+    print_error "Python script not found: $SCRIPT_DIR/$PYTHON_SCRIPT"
+    exit 1
+fi
+
+print_status "Starting audio transcription for: $URL"
+
+# Change to script directory
+cd "$SCRIPT_DIR" || exit 1
+
+# Activate virtual environment and run transcription
+source "$VENV_PATH/bin/activate" || {
+    print_error "Failed to activate virtual environment"
+    exit 1
+}
+
+# Build command with default arguments
+CMD_ARGS=()
+CMD_ARGS+=("-w" "$DEFAULT_WORKERS")
+CMD_ARGS+=("-m" "$DEFAULT_MODEL")
+
+if [ -n "$DEFAULT_LANGUAGE" ]; then
+    CMD_ARGS+=("-l" "$DEFAULT_LANGUAGE")
+fi
+
+if [ -n "$DEFAULT_FORMAT" ]; then
+    CMD_ARGS+=("-f" "$DEFAULT_FORMAT")
+fi
+
+# Add URL
+CMD_ARGS+=("$URL")
+
+# Add any additional arguments passed to the script
+CMD_ARGS+=("$@")
+
+print_status "Running: python $PYTHON_SCRIPT ${CMD_ARGS[*]}"
+
+# Run the transcription
+python "$PYTHON_SCRIPT" "${CMD_ARGS[@]}"
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    print_status "Transcription completed successfully!"
+    print_status "Content should be available in your clipboard"
+else
+    print_error "Transcription failed with exit code: $EXIT_CODE"
+fi
+
+exit $EXIT_CODE

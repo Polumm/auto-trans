@@ -1,0 +1,31 @@
+# === Core Dependencies ===
+yt-dlp==2024.12.06          # Latest stable version with bug fixes
+pyperclip==1.8.2            # Clipboard handling
+openai-whisper==20231117    # Latest stable Whisper version
+
+# PyTorch ecosystem (required by Whisper)
+torch>=2.0.0,<3.0.0        # PyTorch - supports both CPU and GPU
+torchaudio>=2.0.0,<3.0.0    # Audio processing for PyTorch
+
+# === Alternative Whisper (choose one) ===
+# Uncomment below if you prefer faster-whisper (especially for GPU)
+# faster-whisper==1.0.0     # Faster implementation using CTranslate2
+
+# === Optional Enhancements ===
+rich==13.7.1                # Better CLI output and progress bars
+
+# === Development/Debug (optional) ===
+# numpy>=1.21.0             # Usually installed with torch
+# librosa>=0.10.0           # Advanced audio processing (if needed)
+
+# === System Requirements Notes ===
+# 1. FFmpeg must be installed system-wide:
+#    Ubuntu/Debian: sudo apt install ffmpeg
+#    macOS: brew install ffmpeg  
+#    Windows: Download from https://ffmpeg.org/
+#
+# 2. For GPU acceleration with CUDA:
+#    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# 3. For CPU-only installation:
+#    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
